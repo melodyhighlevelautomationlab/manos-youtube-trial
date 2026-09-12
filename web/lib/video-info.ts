@@ -1,8 +1,18 @@
-import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 
-const execFileAsync = promisify(execFile);
+/**
+ * child_process is imported lazily so this module also bundles on runtimes
+ * without it (Cloudflare Workers via OpenNext), where the route runs in mock mode.
+ */
+async function execFileAsync(
+  file: string,
+  args: string[],
+  options: { timeout: number; maxBuffer: number; windowsHide: boolean; env: NodeJS.ProcessEnv },
+): Promise<{ stdout: string; stderr: string }> {
+  const { execFile } = await import("node:child_process");
+  return promisify(execFile)(file, args, { ...options, encoding: "utf8" });
+}
 
 /** Shape returned by python/fetch_video_info.py (and by the mock). */
 export type VideoInfo = {
@@ -81,21 +91,74 @@ function tryParseScriptError(stdout: string | undefined): string | null {
   }
 }
 
+/** Where the Python HTTP function lives, if we should use one instead of spawning a process. */
+function resolvePythonServiceUrl(): string | null {
+  if (process.env.VIDEO_INFO_PY_URL) return process.env.VIDEO_INFO_PY_URL;
+  // On Vercel, web/api/yt.py is deployed as a Python function next to this app.
+  if (process.env.VERCEL) {
+    const host =
+      process.env.VERCEL_ENV === "production"
+        ? (process.env.VERCEL_PROJECT_PRODUCTION_URL ?? process.env.VERCEL_URL)
+        : process.env.VERCEL_URL;
+    if (host) return `https://${host}/api/yt`;
+  }
+  return null;
+}
+
+async function fetchFromPythonService(
+  endpoint: string,
+  url: string,
+): Promise<{ info: VideoInfo; source: VideoInfoSource }> {
+  let response: Response;
+  try {
+    response = await fetch(`${endpoint}?url=${encodeURIComponent(url)}`, {
+      signal: AbortSignal.timeout(30_000),
+      cache: "no-store",
+    });
+  } catch (err) {
+    const timedOut = err instanceof Error && err.name === "TimeoutError";
+    throw new VideoInfoError(
+      timedOut
+        ? "Timed out while fetching metadata from YouTube."
+        : "Could not reach the metadata service.",
+      timedOut ? 504 : 502,
+    );
+  }
+
+  const body = (await response.json().catch(() => null)) as
+    | (VideoInfo & { error?: undefined })
+    | { error: string }
+    | null;
+  if (!response.ok || body === null || typeof body.error === "string") {
+    const message =
+      body !== null && typeof body.error === "string"
+        ? body.error
+        : `Metadata service returned ${response.status}.`;
+    throw new VideoInfoError(message, response.status === 400 ? 400 : 502);
+  }
+  return { info: body, source: "python" };
+}
+
 /**
- * Fetch metadata for a YouTube URL.
+ * Fetch metadata for a YouTube URL. Three modes, checked in order:
  *
- * Runs `python/fetch_video_info.py` as a child process and parses its JSON
- * stdout. Configure with:
- *   PYTHON_BIN                    interpreter (default: `python` on Windows, `python3` elsewhere)
- *   PYTHON_SCRIPT                 absolute path to the script (default: ../python/fetch_video_info.py)
- *   VIDEO_INFO_MOCK=1             skip Python entirely and return sample data
- *   VIDEO_INFO_FALLBACK_TO_MOCK=0 fail instead of returning sample data when Python is missing
+ *   1. VIDEO_INFO_MOCK=1          return sample data, no Python involved
+ *   2. Python over HTTP           VIDEO_INFO_PY_URL, or automatically on Vercel (web/api/yt.py)
+ *   3. Python as a child process  runs ../python/fetch_video_info.py locally
+ *        PYTHON_BIN                    interpreter (default: `python` on Windows, `python3` elsewhere)
+ *        PYTHON_SCRIPT                 absolute path to the script
+ *        VIDEO_INFO_FALLBACK_TO_MOCK=0 fail instead of returning sample data when Python is missing
  */
 export async function fetchVideoInfo(
   url: string,
 ): Promise<{ info: VideoInfo; source: VideoInfoSource }> {
   if (process.env.VIDEO_INFO_MOCK === "1") {
     return { info: { ...MOCK_VIDEO_INFO, url }, source: "mock" };
+  }
+
+  const serviceUrl = resolvePythonServiceUrl();
+  if (serviceUrl) {
+    return fetchFromPythonService(serviceUrl, url);
   }
 
   const pythonBin =

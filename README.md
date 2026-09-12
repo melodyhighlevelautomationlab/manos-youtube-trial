@@ -70,7 +70,25 @@ GET  /api/video-info?url=https://youtu.be/jNQXAC9IVRw
 504 { "error": "..." }   script timed out (30 s)
 ```
 
-How the wiring works (`web/lib/video-info.ts`): the route calls `execFile(python, [fetch_video_info.py, url])`, parses stdout as JSON, and maps the script's exit code to an HTTP status. If the interpreter isn't found it falls back to sample data and the UI shows a "Mock data" badge instead of "Live via yt-dlp". Behaviour is configurable via `web/.env.example` (`PYTHON_BIN`, `PYTHON_SCRIPT`, `VIDEO_INFO_MOCK=1`, `VIDEO_INFO_FALLBACK_TO_MOCK=0`).
+How the wiring works (`web/lib/video-info.ts`), in order of precedence:
+
+1. **Mock** (`VIDEO_INFO_MOCK=1`): sample data, and the UI shows a "Mock data" badge instead of "Live via yt-dlp".
+2. **Python over HTTP** (`VIDEO_INFO_PY_URL`, or automatic on Vercel): the route calls `web/api/yt.py`, a Vercel Python function that wraps the same yt-dlp logic. This is how the deployed demo works, since Vercel's Node runtime can't spawn Python.
+3. **Python child process** (local default): the route runs `execFile(python, [fetch_video_info.py, url])`, parses stdout as JSON, and maps the script's exit code to an HTTP status. If the interpreter isn't found it falls back to mock data.
+
+All knobs are listed in `web/.env.example`.
+
+## Deploying to Vercel
+
+The `web/` folder is the Vercel project root. Vercel builds the Next.js app and, because `web/api/yt.py` and `web/requirements.txt` exist, also deploys the Python function at `/api/yt`. No environment variables are needed.
+
+```bash
+cd web
+npx vercel login
+npx vercel --prod
+```
+
+`web/api/yt.py` duplicates about 30 lines from `python/fetch_video_info.py` on purpose: Vercel only bundles files under the project root. In a real repo both would import a shared package.
 
 ## Part 3 — Write-up
 
