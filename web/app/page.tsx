@@ -70,7 +70,7 @@ export default function Home() {
             YouTube Video Info
           </h1>
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            Paste a YouTube link and we&apos;ll pull its metadata with yt-dlp.
+            Paste a YouTube link and we&apos;ll pull its title, duration, views and upload date.
           </p>
         </header>
 
