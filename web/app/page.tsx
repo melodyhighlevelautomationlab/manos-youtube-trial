@@ -169,7 +169,11 @@ export default function Home() {
                       : "rounded-full bg-amber-50 px-2 py-0.5 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
                   }
                 >
-                  {result.source === "python" ? "Live via yt-dlp" : "Mock data"}
+                  {result.source === "mock"
+                    ? "Mock data"
+                    : result.info.provider === "youtube-data-api"
+                      ? "Live via YouTube Data API"
+                      : "Live via yt-dlp"}
                 </span>
               </div>
             </div>

@@ -1,20 +1,29 @@
 """Vercel Python serverless function: GET /api/yt?url=<youtube-url>
 
-Exposes the same yt-dlp extraction as python/fetch_video_info.py over HTTP so
+Exposes the same metadata extraction as python/fetch_video_info.py over HTTP so
 the Next.js route can use it on hosts that have no Python interpreter (Vercel's
 Node runtime can't spawn Python, but Vercel does run Python functions).
 
+Providers, in order:
+  1. YouTube Data API v3  when YOUTUBE_API_KEY is set. Works from any IP.
+  2. yt-dlp               otherwise (or if the Data API call fails). Note that
+                          YouTube bot-blocks yt-dlp from datacenter IP ranges
+                          such as Vercel's, so on Vercel you want the key.
+
 Note: Vercel only bundles files under the project root (web/), so the ~30 lines
-of extraction/formatting logic are inlined here instead of importing from
+of yt-dlp extraction/formatting logic are inlined here instead of importing from
 python/. In a real codebase this would be a shared package.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 YOUTUBE_HOSTS = {
     "youtube.com",
@@ -86,7 +95,7 @@ def _extract(url: str, player_clients: list[str] | None) -> dict:
         return ydl.extract_info(url, download=False)
 
 
-def fetch_metadata(url: str) -> dict:
+def fetch_via_ytdlp(url: str) -> dict:
     attempts: list[list[str] | None] = [None] + [[c] for c in _fallback_clients()]
     last_error: Exception | None = None
     info = None
@@ -114,7 +123,110 @@ def fetch_metadata(url: str) -> dict:
         "channel": info.get("channel") or info.get("uploader"),
         "thumbnail": info.get("thumbnail"),
         "url": info.get("webpage_url") or url,
+        "provider": "yt-dlp",
     }
+
+
+# --- YouTube Data API v3 -----------------------------------------------------
+
+VIDEO_ID_RE = re.compile(r"[A-Za-z0-9_-]{11}")
+ISO_DURATION_RE = re.compile(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?")
+
+
+class VideoNotFound(Exception):
+    """The Data API returned no item: wrong ID, private, or deleted video."""
+
+
+def extract_video_id(url: str) -> str | None:
+    parsed = urlparse(url.strip())
+    host = parsed.netloc.lower()
+    candidate: str | None = None
+    if host in {"youtu.be", "www.youtu.be"}:
+        candidate = parsed.path.strip("/").split("/")[0] if parsed.path.strip("/") else None
+    else:
+        query = parse_qs(parsed.query)
+        if query.get("v"):
+            candidate = query["v"][0]
+        else:
+            parts = [p for p in parsed.path.split("/") if p]
+            if len(parts) >= 2 and parts[0] in {"shorts", "embed", "live", "v"}:
+                candidate = parts[1]
+    return candidate if candidate and VIDEO_ID_RE.fullmatch(candidate) else None
+
+
+def parse_iso_duration(value: str | None) -> int | None:
+    """'PT1H2M3S' -> 3723. Live streams report 'P0D' -> 0."""
+    if not value:
+        return None
+    match = ISO_DURATION_RE.fullmatch(value)
+    if not match:
+        return None
+    days, hours, minutes, seconds = (int(x) if x else 0 for x in match.groups())
+    return days * 86400 + hours * 3600 + minutes * 60 + seconds
+
+
+def fetch_via_data_api(url: str, api_key: str) -> dict:
+    video_id = extract_video_id(url)
+    if not video_id:
+        raise VideoNotFound("Could not find a video ID in that URL.")
+
+    params = urlencode(
+        {"part": "snippet,contentDetails,statistics", "id": video_id, "key": api_key}
+    )
+    request = urllib.request.Request(
+        f"https://www.googleapis.com/youtube/v3/videos?{params}",
+        headers={"Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            payload = json.load(response)
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = json.load(exc)["error"]["message"]
+        except Exception:
+            detail = exc.reason
+        raise RuntimeError(f"YouTube Data API error {exc.code}: {detail}") from exc
+
+    items = payload.get("items") or []
+    if not items:
+        raise VideoNotFound("Video not found. It may be private, deleted, or the ID is wrong.")
+
+    item = items[0]
+    snippet = item.get("snippet", {})
+    stats = item.get("statistics", {})
+    thumbs = snippet.get("thumbnails", {})
+    thumbnail = next(
+        (thumbs[k]["url"] for k in ("maxres", "standard", "high", "medium", "default") if k in thumbs),
+        None,
+    )
+    seconds = parse_iso_duration(item.get("contentDetails", {}).get("duration"))
+    published = snippet.get("publishedAt")  # e.g. 2009-10-25T06:57:33Z
+    views = stats.get("viewCount")  # absent when the channel hides view counts
+
+    return {
+        "id": item.get("id"),
+        "title": snippet.get("title"),
+        "duration_seconds": seconds,
+        "duration": format_duration(seconds),
+        "view_count": int(views) if views is not None else None,
+        "upload_date": published[:10] if published else None,
+        "channel": snippet.get("channelTitle"),
+        "thumbnail": thumbnail,
+        "url": f"https://www.youtube.com/watch?v={item.get('id')}",
+        "provider": "youtube-data-api",
+    }
+
+
+def fetch_metadata(url: str) -> dict:
+    api_key = os.environ.get("YOUTUBE_API_KEY", "").strip()
+    if api_key:
+        try:
+            return fetch_via_data_api(url, api_key)
+        except VideoNotFound:
+            raise
+        except Exception as exc:
+            print(f"[yt] Data API failed, falling back to yt-dlp: {exc}", file=sys.stderr)
+    return fetch_via_ytdlp(url)
 
 
 class handler(BaseHTTPRequestHandler):  # Vercel looks for a class named `handler`
@@ -128,6 +240,9 @@ class handler(BaseHTTPRequestHandler):  # Vercel looks for a class named `handle
 
         try:
             data = fetch_metadata(url)
+        except VideoNotFound as exc:
+            self._json(404, {"error": str(exc)})
+            return
         except Exception as exc:  # yt_dlp.utils.DownloadError and friends
             message = str(exc).replace("ERROR: ", "", 1).strip()
             self._json(502, {"error": message or "Could not fetch video metadata."})

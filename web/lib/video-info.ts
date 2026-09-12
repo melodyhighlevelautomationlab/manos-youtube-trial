@@ -25,6 +25,8 @@ export type VideoInfo = {
   channel: string | null;
   thumbnail: string | null;
   url: string;
+  /** Which upstream produced the data. Absent from the CLI script (always yt-dlp) and the mock. */
+  provider?: "yt-dlp" | "youtube-data-api";
 };
 
 export type VideoInfoSource = "python" | "mock";
@@ -134,7 +136,8 @@ async function fetchFromPythonService(
       body !== null && typeof body.error === "string"
         ? body.error
         : `Metadata service returned ${response.status}.`;
-    throw new VideoInfoError(message, response.status === 400 ? 400 : 502);
+    const status = response.status === 400 || response.status === 404 ? response.status : 502;
+    throw new VideoInfoError(message, status);
   }
   return { info: body, source: "python" };
 }
