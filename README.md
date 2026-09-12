@@ -73,7 +73,7 @@ GET  /api/video-info?url=https://youtu.be/jNQXAC9IVRw
 How the wiring works (`web/lib/video-info.ts`), in order of precedence:
 
 1. **Mock** (`VIDEO_INFO_MOCK=1`): sample data, and the UI shows a "Mock data" badge instead of "Live via yt-dlp".
-2. **Python over HTTP** (`VIDEO_INFO_PY_URL`, or automatic on Vercel): the route calls `web/api/yt.py`, a Vercel Python function that wraps the same yt-dlp logic. This is how the deployed demo works, since Vercel's Node runtime can't spawn Python.
+2. **Python over HTTP** (`VIDEO_INFO_PY_URL`, or automatic on Vercel): the route calls `web/api/yt.py`, a Vercel Python function that returns the same JSON shape (YouTube Data API when `YOUTUBE_API_KEY` is set, yt-dlp otherwise). This is how the deployed demo works, since Vercel's Node runtime can't spawn Python.
 3. **Python child process** (local default): the route runs `execFile(python, [fetch_video_info.py, url])`, parses stdout as JSON, and maps the script's exit code to an HTTP status. If the interpreter isn't found it falls back to mock data.
 
 All knobs are listed in `web/.env.example`.
