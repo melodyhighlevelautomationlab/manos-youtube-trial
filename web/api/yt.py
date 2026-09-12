@@ -11,6 +11,8 @@ python/. In a real codebase this would be a shared package.
 from __future__ import annotations
 
 import json
+import os
+import sys
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
@@ -54,18 +56,53 @@ class _SilentLogger:
     def error(self, msg): ...
 
 
-def fetch_metadata(url: str) -> dict:
+BOT_CHECK_MARKER = "not a bot"
+
+
+def _fallback_clients() -> list[str]:
+    """Comma-separated yt-dlp YouTube player clients to try when the default one is blocked.
+
+    YouTube's "confirm you're not a bot" check mostly targets the default web client from
+    datacenter IPs (like serverless functions); other clients often still work.
+    Example: YTDLP_PLAYER_CLIENTS=android_vr,ios,tv
+    """
+    raw = os.environ.get("YTDLP_PLAYER_CLIENTS", "")
+    return [c.strip() for c in raw.split(",") if c.strip()]
+
+
+def _extract(url: str, player_clients: list[str] | None) -> dict:
     import yt_dlp
 
-    options = {
+    options: dict = {
         "quiet": True,
         "no_warnings": True,
         "logger": _SilentLogger(),
         "skip_download": True,
         "noplaylist": True,
     }
+    if player_clients:
+        options["extractor_args"] = {"youtube": {"player_client": player_clients}}
     with yt_dlp.YoutubeDL(options) as ydl:
-        info = ydl.extract_info(url, download=False)
+        return ydl.extract_info(url, download=False)
+
+
+def fetch_metadata(url: str) -> dict:
+    attempts: list[list[str] | None] = [None] + [[c] for c in _fallback_clients()]
+    last_error: Exception | None = None
+    info = None
+    for clients in attempts:
+        try:
+            info = _extract(url, clients)
+            print(f"[yt] ok via player_client={clients or 'default'}", file=sys.stderr)
+            break
+        except Exception as exc:
+            last_error = exc
+            if BOT_CHECK_MARKER not in str(exc):
+                raise
+            print(f"[yt] blocked via player_client={clients or 'default'}", file=sys.stderr)
+    if info is None:
+        assert last_error is not None
+        raise last_error
 
     return {
         "id": info.get("id"),

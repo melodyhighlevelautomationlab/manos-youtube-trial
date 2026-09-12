@@ -80,13 +80,17 @@ All knobs are listed in `web/.env.example`.
 
 ## Deploying to Vercel
 
-The `web/` folder is the Vercel project root. Vercel builds the Next.js app and, because `web/api/yt.py` and `web/requirements.txt` exist, also deploys the Python function at `/api/yt`. No environment variables are needed.
+Live demo: **https://manos-youtube-trial.vercel.app** (runs in mock mode, see below).
+
+The `web/` folder is the Vercel project root. Vercel builds the Next.js app and, because `web/api/yt.py` and `web/requirements.txt` exist, also deploys the Python function at `/api/yt`.
 
 ```bash
 cd web
 npx vercel login
 npx vercel --prod
 ```
+
+**Why the demo is in mock mode.** The Python function deploys and runs fine, but YouTube answers every request from Vercel's IP range with "Sign in to confirm you're not a bot", for every yt-dlp player client I tried (`android_vr`, `ios`, `tv`, `mweb`, `web_embedded`, `android`; the fallback loop is still in `web/api/yt.py` behind `YTDLP_PLAYER_CLIENTS`). So the deployed project sets `VIDEO_INFO_MOCK=1` and the UI shows the "Mock data" badge. Locally, without that variable, everything is live. Getting live data from a datacenter needs one of: routing yt-dlp through a residential proxy, passing a logged-in account's cookies (not something I'd commit to a trial repo), or switching the hosted path to the YouTube Data API v3, which returns the same four fields from any IP with an API key.
 
 `web/api/yt.py` duplicates about 30 lines from `python/fetch_video_info.py` on purpose: Vercel only bundles files under the project root. In a real repo both would import a shared package.
 
@@ -104,4 +108,5 @@ npx vercel --prod
 **What broke / didn't work as expected.**
 - `next build` failed type-checking on the first pass: a discriminated union for the API response didn't narrow the way I expected, and `NodeJS.ErrnoException` types `code` as a string so comparing it to the numeric exit code was flagged. Fixed by simplifying the union to `{ data, source } | { error }` with an `in` check, and typing the exec error explicitly.
 - `yt-dlp` still printed `ERROR: ...` lines even with `quiet: true`, which would have polluted output if anything read stderr. Solved with a no-op logger so the script's stdout is the only channel.
+- The first Vercel deploy returned live data once and then YouTube's bot check blocked 5 of the next 6 lookups (the one success was almost certainly the edge cache). I added a player-client fallback loop and retried with six alternate clients from a fresh deployment; all were blocked, each request taking ~8 s for seven failed attempts. Conclusion: the block is on the IP range, not the client, so the hosted demo runs in mock mode. Given more time I'd verify that with `yt-dlp -v` from a Vercel shell, then try the Data API path above since it needs no proxy.
 - With more time I'd want to see how the child-process approach behaves under concurrent requests (each spawn is a fresh interpreter, roughly 1–2 s of overhead) and load-test it before deciding between the HTTP-service and queue options above.
