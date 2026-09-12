@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+python/*.json
+
+# Node / Next.js
+web/node_modules/
+web/.next/
+web/out/
+web/.env*
+!web/.env.example
+web/*.tsbuildinfo
+web/next-env.d.ts
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
