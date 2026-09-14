@@ -66,9 +66,17 @@ export default function Home() {
     <main className="flex flex-1 items-start justify-center bg-zinc-50 px-4 py-16 dark:bg-zinc-950">
       <div className="w-full max-w-2xl space-y-6">
         <header className="space-y-1">
-          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-            YouTube Video Info
-          </h1>
+          <div className="flex items-center justify-between gap-4">
+            <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+              YouTube Video Info
+            </h1>
+            <a
+              href="/version2"
+              className="text-xs text-zinc-500 underline decoration-zinc-300 underline-offset-2 hover:text-zinc-800 dark:hover:text-zinc-200"
+            >
+              Version 2: topic to video
+            </a>
+          </div>
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
             Paste a YouTube link and we&apos;ll pull its title, duration, views and upload date.
           </p>

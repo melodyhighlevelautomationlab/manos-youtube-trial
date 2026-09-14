@@ -3,6 +3,10 @@
   "functions": {
     "api/yt.py": {
       "maxDuration": 60
+    },
+    "api/generate.py": {
+      "maxDuration": 300,
+      "memory": 2048
     }
   }
 }

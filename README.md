@@ -97,7 +97,53 @@ To create a key: Google Cloud Console → APIs & Services → Library → enable
 
 `web/api/yt.py` duplicates about 30 lines from `python/fetch_video_info.py` on purpose: Vercel only bundles files under the project root. In a real repo both would import a shared package.
 
-## Part 3 — Write-up
+---
+
+# Version 2 — Topic to video (trial task 2)
+
+Live: **https://manos-youtube-trial.vercel.app/version2** · sample output: [`/version2/sample.mp4`](https://manos-youtube-trial.vercel.app/version2/sample.mp4)
+
+Type a topic, get back a short narrated mp4 with images, synced captions and music. Same repo, same stack, same pattern as version 1: a Next.js page calls a Python function over HTTP, and the Python does the work.
+
+```
+web/
+├── app/version2/page.tsx   # topic input, progress, <video> player, scene list, download
+├── api/generate.py         # Vercel Python function: POST {"topic"} -> video/mp4 (+ X-Video-Meta header)
+├── videogen/pipeline.py    # the pipeline, one function per stage
+├── videogen/__main__.py    # CLI: python -m videogen "Ada Lovelace" --out ada.mp4 --size 1280x720
+└── public/version2/sample.mp4
+```
+
+## How it works
+
+| Stage | Tool | Notes |
+| --- | --- | --- |
+| Topic → article | Wikipedia REST API | title search, summary text, article images. No key. |
+| Script | Claude (optional) or the summary's own sentences | Set `ANTHROPIC_API_KEY` and Claude rewrites the summary into six spoken-word sentences; without it, the summary sentences are used as-is (that's what the live demo does). |
+| Voiceover | edge-tts (Microsoft neural voices) | Free, no key. One request per scene, run concurrently. Word-level timings come back with the audio. |
+| Captions | Pillow | Words are grouped into 4–5 word chunks and each chunk becomes a frame timed to the speech. Title tag top-left, gradient for legibility. |
+| Music | Pure Python synth | A slow Am–F–G–Em pad from sine waves, faded in and out, mixed at −20 dB. No samples, so no licensing question. |
+| Assembly | ffmpeg (`imageio-ffmpeg` static binary) | concat demuxer for frames and narration, `amix` for music, H.264 480p `yuv420p` faststart. ~0.8 MB for 40 s. |
+
+Local run (needs Python 3.11+, no ffmpeg install required):
+
+```bash
+cd web
+pip install -r requirements.txt
+python -m videogen "Great Barrier Reef" --out reef.mp4
+```
+
+Timings on a laptop: about 14 s for a 42-second video. On Vercel the function has a 300 s budget and 2 GB memory.
+
+## What I'd add next
+
+- **Real footage.** Pexels/Pixabay video search per scene (free keys), with a Ken Burns zoom on stills as the fallback. The frame renderer already takes one image per scene, so this is a swap, not a rewrite.
+- **Better script.** Turn on the Claude path by default and let it pick the image search terms too, so images match each sentence rather than the article as a whole.
+- **Progress streaming.** The page fakes progress on elapsed time because it's one request. Move generation to a background job (Vercel Queue or a worker) and stream stage events; also lets videos run longer than a request.
+- **Storage.** Upload the mp4 to Vercel Blob or S3 and return a URL instead of the bytes, which also removes the response-size ceiling.
+- **Quality.** Crossfades between scenes, a voice picker, 1080p, subtitle file export (the timings already exist).
+
+## Part 3 — Write-up (version 1)
 
 **AI tooling.** I used Claude Code (Anthropic's CLI agent) for this task. I gave it the brief and had it scaffold the project (`create-next-app`), write the first pass of the Python script, the API route and the page, and run the build/lint loop. I reviewed each file, decided the API contract (JSON-only stdout with exit codes 1/2 so the route can map them to 400/502), asked for the mock fallback to be explicit and visible in the UI rather than silent, and verified the script by hand against a normal watch URL, a `youtu.be` short link with a playlist param, a non-YouTube URL and a nonexistent video ID. I also chose to spawn the script as a child process rather than mock the route, since Python was available locally.
 
