@@ -19,3 +19,6 @@ web/next-env.d.ts
 Thumbs.db
 .vscode/
 .idea/
+
+# Vercel CLI link (project root directory is web/)
+.vercel/
