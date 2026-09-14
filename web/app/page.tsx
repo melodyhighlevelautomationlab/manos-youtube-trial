@@ -71,10 +71,10 @@ export default function Home() {
               YouTube Video Info
             </h1>
             <a
-              href="/version2"
+              href="https://manos-youtube-trial2.vercel.app"
               className="text-xs text-zinc-500 underline decoration-zinc-300 underline-offset-2 hover:text-zinc-800 dark:hover:text-zinc-200"
             >
-              Version 2: topic to video
+              Trial task 2: topic to video
             </a>
           </div>
           <p className="text-sm text-zinc-600 dark:text-zinc-400">
